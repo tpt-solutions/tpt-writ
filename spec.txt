@@ -1,0 +1,234 @@
+# tpt-writ — Design Spec
+
+A proof-gated capability guard for MCP tool calls. Same mechanism as `tpt-nexus`'s
+proof→capability derivation, applied to a different target: instead of minting an
+Archon memory-page right, it mints an MCP tool-call scope, and checks it before
+letting an external agent's tool call through.
+
+**Explicitly not a Nexus dependency.** Depends on `tpt-telos-sdk` directly. Nexus
+stays exactly what its README says it is (telos↔archon, nothing else); this is a
+sibling application of the same idea, not an extension of Nexus's scope.
+
+---
+
+## Why this, why now
+
+Nexus already proved the hard part works: verify a program against `requires`/
+`ensures` contracts, attest the result, derive a minimal right from *what the
+proof showed the function does*, and refuse anything that oversteps. That
+mechanism is currently wired to one consumer (Archon) and one right vocabulary
+(page capabilities). Everything else — the verifier, the attestation format, the
+anti-tamper manifest check, the signing — is already generic. The only
+Archon-specific piece is `derive_rights` in `tpt-nexus-archon-emulator`.
+
+`tpt-writ` re-targets that one piece at MCP tool calls, which matters because
+MCP is already the interop surface: `tpt-locus`, `tpt-anima`, and any external
+agent framework can all speak it. A proof-gated guard sitting in front of an
+MCP tool call is useful to agents that have never heard of the rest of the TPT
+stack.
+
+---
+
+## Position in the stack
+
+```
+                    (unchanged, reused as-is)
+┌──────────────┐  ProofManifest   ┌──────────────────┐
+│ tpt-telos-sdk│ ───────────────▶ │  tpt-writ-core   │
+│ compile()    │                  │  right derivation  │
+└──────────────┘                  │  (MCP vocabulary)  │
+                                   └─────────┬──────────┘
+                                             │ WritGrant
+                                             ▼
+                                   ┌──────────────────┐      MCP tool call
+                                   │ tpt-writ-mcp     │◀───────────────────
+                                   │  interceptor       │      from any agent
+                                   └─────────┬──────────┘
+                                             │ allow / deny
+                                             ▼
+                                   ┌──────────────────┐
+                                   │  wrapped MCP tool  │
+                                   │  (any server)      │
+                                   └──────────────────┘
+```
+
+`tpt-nexus`'s own crates are not in this diagram anywhere. Same upstream input
+(`ProofManifest` from `tpt-telos-sdk::compile`), different downstream target.
+
+---
+
+## Crate layout
+
+Small on purpose — this should stay a few days of work, not a new five-crate
+family.
+
+- **`tpt-writ-core`** — the right-derivation logic and the `WritGrant` type.
+  No MCP dependency here; this crate only knows about proofs and rights.
+- **`tpt-writ-mcp`** — the MCP-specific adapter: wraps a tool call, checks a
+  grant, produces an enriched denial matching the shape of Archon's
+  `CacheError::Denied` (same "what did you hold vs. what did you need" clarity).
+- **`tpt-writ-cli`** — `writ verify`, `writ guard`, `writ diff` — deliberately
+  mirrors `nexus verify`/`nexus diff` naming so anyone who's used Nexus already
+  knows the mental model.
+
+No manifest-validator or archon-emulator crates — `tpt-writ` reuses
+`tpt-nexus-manifest-validator`'s anti-tamper logic as a dependency rather than
+reimplementing it (the VALIDATE step doesn't care what the downstream target is).
+
+---
+
+## 1. Right vocabulary — the actual design problem
+
+Archon's rights are simple because the target is simple: a page is `Read` or
+`ReadWrite`. MCP tool calls are heterogeneous — a tool might read a file, call
+an external API, write to a database, spawn a process. A single `Read`/`ReadWrite`
+enum doesn't fit.
+
+Proposed `Right` shape for v0.1, deliberately narrow:
+
+```rust
+enum WritRight {
+    /// Proved to only read the named resource class.
+    Read { resource_class: String },
+    /// Proved to write the named resource class.
+    Write { resource_class: String },
+    /// No proved resource interaction (pure computation).
+    Pure,
+}
+```
+
+`resource_class` is a string the `.telos` author declares via an annotation
+(mirroring `@boundary(...)`/`@state(...)` in tpt-telos), e.g.
+`@resource("filesystem:/data")` or `@resource("db:users")`. The proof obligation
+becomes: *does the accepted function body only touch state tagged with this
+resource class, and how (read/write)?* This is a materially harder proof
+obligation than Archon's "did it write a struct field" check — it needs the
+verifier to track resource-class provenance through the function body, which
+`tpt-telos-ir` doesn't currently do.
+
+**This is the one piece that isn't just glue code.** Everything else in this
+spec is wiring; this is new verification surface. Scope it as its own milestone
+(see Build order below), and until it lands, ship v0.1 with a **deliberately
+conservative fallback**: any function that isn't provably `Pure` derives the
+single coarse right `Write { resource_class: "*" }`. Under-granting nothing,
+never over-granting — the same fail-closed posture Nexus already has.
+
+---
+
+## 2. Core types (`tpt-writ-core`)
+
+```rust
+pub struct WritGrant {
+    pub function_name: String,
+    pub right: WritRight,
+    pub manifest_hash: [u8; 32],   // ties the grant to a specific attested proof
+    pub issued_at: SystemTime,
+}
+
+pub trait RightDerivation {
+    fn derive(&self, manifest: &ProofManifest, function: &str) -> WritGrant;
+}
+
+// v0.1: the conservative derivation described above.
+pub struct ConservativeDerivation;
+impl RightDerivation for ConservativeDerivation { /* ... */ }
+
+// future milestone: resource-class-aware derivation, once tpt-telos-ir
+// supports resource-class tracking.
+pub struct ResourceAwareDerivation;
+```
+
+Keeping `RightDerivation` as a trait from day one means the conservative
+fallback and the future resource-aware version are swappable without touching
+`tpt-writ-mcp` at all.
+
+---
+
+## 3. MCP interceptor (`tpt-writ-mcp`)
+
+```rust
+pub struct WritGuard<D: RightDerivation> {
+    derivation: D,
+    grants: HashMap<String, WritGrant>, // function_name -> current grant
+}
+
+impl<D: RightDerivation> WritGuard<D> {
+    /// Load a validated, signed ProofManifest and populate grants.
+    pub fn from_manifest(manifest: ProofManifest, sig: Signature) -> Result<Self, WritError>;
+
+    /// Called before dispatching an MCP tool call. Returns Ok(()) or a
+    /// WritDenied with the grant that was held and the access attempted.
+    pub fn check_call(&self, tool_name: &str, resource_class: &str, mode: AccessMode)
+        -> Result<(), WritDenied>;
+}
+```
+
+Integration shape for an MCP server: wrap the existing tool dispatch function
+with `guard.check_call(...)` before the real handler runs. This is intentionally
+a thin wrapper, not a fork of any MCP server — `tpt-writ-mcp` should work as
+a decorator around `rmcp` or any other Rust MCP server implementation without
+requiring changes to the server itself.
+
+---
+
+## 4. Reused as-is (no new code)
+
+- **VALIDATE step** — `tpt-nexus-manifest-validator`'s hash re-derivation and
+  tamper detection, used directly as a library dependency.
+- **Signing** — the same ed25519 attestation-signing flow Nexus already has;
+  `tpt-writ` just checks a signature before trusting a manifest, same as
+  `nexus verify-signature`.
+- **`tpt-telos-sdk::compile`** — no changes needed. `tpt-writ` is a pure
+  consumer of `ProofManifest`.
+
+---
+
+## 5. CLI
+
+```
+# Verify a .telos program and print the derived MCP grant table
+writ verify service.telos
+
+# Start guarding a running MCP server, wrapping its tool dispatch
+writ guard --manifest nexus-out/telos-proof.json --target <mcp-server-socket>
+
+# Same idea as `nexus diff`: did the resource-access surface widen?
+writ diff before.telos after.telos
+# exit 0 = no change or a narrowing; 1 = a widening (new Write, or Pure -> Read/Write)
+
+# Environment/dependency check before a build
+writ doctor
+```
+
+---
+
+## 6. Non-goals (keep this small)
+
+- **Not a new orchestration layer.** No agent lifecycle management, no DAG
+  scheduling — `tpt-locus` and `tpt-anima` already do that. `tpt-writ` only
+  answers "is this one tool call allowed."
+- **Not a fork of any MCP server implementation.** Wraps, never reimplements.
+- **Not a new verifier.** All proof obligations still go through
+  `tpt-telos-verifier`. `tpt-writ` only interprets the resulting manifest
+  differently than Nexus does.
+- **No `tpt-writ-*` crate should ever depend on `tpt-nexus-*` crates**, and
+  vice versa. If a future change makes that dependency feel necessary, that's
+  a signal the scope has drifted back toward "one big fabric" and should be
+  reconsidered rather than implemented.
+
+---
+
+## Build order
+
+1. **`tpt-writ-core`** with `ConservativeDerivation` only — this alone is
+   enough to prove the pattern generalizes beyond Archon, and it's almost pure
+   wiring against existing `tpt-telos-sdk`/`tpt-nexus-manifest-validator` code.
+2. **`tpt-writ-mcp`**, tested against a minimal real MCP server (not a mock)
+   to confirm the wrapper shape actually works with `rmcp` or equivalent.
+3. **`tpt-writ-cli`** — `verify`/`guard`/`doctor` first; `diff` once there's
+   a second `.telos` version worth comparing against.
+4. **`ResourceAwareDerivation`** — the one genuinely hard part, gated on
+   `tpt-telos-ir` gaining resource-class tracking. Treat this as a `tpt-telos`
+   feature request/contribution, not something reimplemented inside
+   `tpt-writ` — the tracking belongs in the verifier that already owns IR
+   lowering, not duplicated downstream.

@@ -1,0 +1,32 @@
+[package]
+name = "tpt-writ-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "writ: verify, guard, diff, and doctor .telos-backed MCP guards"
+readme = "README.md"
+keywords = ["cli", "mcp", "security", "verification", "formal-methods"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "writ"
+path = "src/main.rs"
+
+[dependencies]
+tpt-writ-core = { workspace = true }
+tpt-writ-mcp = { workspace = true }
+tpt-telos-sdk = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+# Relay round-trip fixtures reuse the generator's serializer.
+tpt-telos-codegen = { workspace = true }
+

@@ -1,0 +1,8 @@
+/target
+# Scratch output from the examples and CLI runs: proof manifests, generated
+# projects, and JSON-lines logs.
+/out
+/gen
+/gen-project
+writ-out/
+*.jsonl

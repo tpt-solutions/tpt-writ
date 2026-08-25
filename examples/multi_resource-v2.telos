@@ -1,0 +1,32 @@
+// v2 of multi_resource.telos: `transfer` no longer touches Receiver at all,
+// narrowing it under ResourceAwareDerivation from the multi-class fallback
+// Write{"*"} down to the single-class Write{"db:senders"}. Everything else
+// is identical to v1 -- see `writ diff examples/multi_resource.telos
+// examples/multi_resource-v2.telos`.
+
+module Bank {
+    @resource(class = "db:senders") invariant Sender { balance >= 0 }
+    @resource(class = "db:receivers") invariant Receiver { balance >= 0 }
+
+    invariant Ledger { total >= 0 }
+
+    func peek_sender(s: Sender)
+    ;
+
+    func bump_sender(s: Sender, amount: PositiveInt)
+        ensures s.balance == old(s.balance) + amount
+    ;
+
+    func transfer(mut sender: Sender, amount: i64)
+        requires amount > 0
+        requires sender.balance >= amount
+        ensures sender.balance == old(sender.balance) - amount
+    {
+        mutate state {
+            sender.balance = old(sender.balance) - amount;
+        }
+    }
+
+    func audit(l: Ledger)
+    ;
+}

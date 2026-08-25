@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tpt-writ-core",
+    "crates/tpt-writ-mcp",
+    "crates/tpt-writ-cli",
+    "crates/out-writ-examples",
+]
+# Crate naming convention, inherited from the sibling `tpt-telos` /
+# `tpt-nexus` workspaces: crates intended for crates.io are prefixed
+# `tpt-writ-`; crates that exist only to demonstrate or exercise the others
+# are prefixed `out-writ-` so publish intent is visible from the directory
+# name alone, rather than from a `publish = false` line buried in a Cargo.toml.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+authors = ["TPT Solutions"]
+repository = "https://github.com/TPT-Org/tpt-writ"
+homepage = "https://github.com/TPT-Org/tpt-writ"
+
+[workspace.dependencies]
+# --- sibling TPT repo, consumed as path dependencies -------------------------
+#
+# `tpt-writ` exists to re-target the proven nexus mechanism (proof -> minimal
+# right) at MCP tool calls, so it deliberately builds against the working tree
+# next to it rather than against published crates.io releases. It depends on
+# `tpt-telos-sdk` directly -- never on any `tpt-nexus-*` crate (see spec §6,
+# non-goals).
+#
+# This assumes the two repos are checked out as siblings:
+#   <parent>/tpt-telos
+#   <parent>/tpt-writ     <-- you are here
+tpt-telos-sdk = { path = "../tpt-telos/crates/tpt-telos-sdk", version = "0.2" }
+tpt-telos-codegen = { path = "../tpt-telos/crates/tpt-telos-codegen", version = "0.2" }
+# Named directly (not just transitively) because tpt-writ-core's manifest
+# mirror spells out tpt_telos_ir::AccessMode in its own reconstructed
+# FuncProof values (Phase 4: resource-class-aware derivation).
+tpt-telos-ir = { path = "../tpt-telos/crates/tpt-telos-ir", version = "0.2" }
+
+# --- internal ---------------------------------------------------------------
+tpt-writ-core = { path = "crates/tpt-writ-core", version = "0.1.0" }
+tpt-writ-mcp = { path = "crates/tpt-writ-mcp", version = "0.1.0" }
+tpt-writ-cli = { path = "crates/tpt-writ-cli", version = "0.1.0" }
+
+# --- third party ------------------------------------------------------------
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ed25519-dalek = "2"
+rand = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "process", "io-util", "time"] }
+rmcp = { version = "3.1.4", features = ["server", "transport-io", "schemars"] }
+
+[profile.release]
+opt-level = 3

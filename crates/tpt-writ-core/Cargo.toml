@@ -1,0 +1,23 @@
+[package]
+name = "tpt-writ-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "MCP right vocabulary and conservative proof-to-grant derivation for tpt-writ"
+readme = "README.md"
+keywords = ["verification", "capabilities", "formal-methods", "least-privilege", "proofs"]
+categories = ["development-tools"]
+
+[dependencies]
+# Sibling repo, consumed as a path dependency (see the workspace Cargo.toml
+# comment): the VALIDATE step reuses telos-codegen's own anti-tamper logic
+# rather than reimplementing it -- never tpt-nexus-manifest-validator.
+tpt-telos-sdk = { workspace = true }
+tpt-telos-codegen = { workspace = true }
+tpt-telos-ir = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  quality:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # tpt-writ builds against the working tree of its sibling repo as a path
+      # dependency (same convention as tpt-nexus), so CI checks it out next to
+      # this checkout: ../tpt-telos/crates/tpt-telos-sdk must resolve.
+      - name: Check out sibling repo (tpt-telos)
+        uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+
+  verify-examples:
+    name: writ verify on examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify example .telos files
+        run: |
+          cargo run -q -p tpt-writ-cli -- verify examples/counter.telos
+          cargo run -q -p tpt-writ-cli -- doctor
+
+  # The pure right-derivation logic is the piece intended to live the longest,
+  # so it keeps an explicit MSRV gate. The MCP example server tracks stable:
+  # rmcp's own MSRV moves with the MCP spec, and pinning it backwards would
+  # test an SDK snapshot nobody ships.
+  msrv:
+    name: MSRV 1.74 (tpt-writ-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: dtolnay/rust-toolchain@1.74.0
+      - name: Test core on MSRV
+        run: cargo test -p tpt-writ-core

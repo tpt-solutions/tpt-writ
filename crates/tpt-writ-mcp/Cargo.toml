@@ -1,0 +1,24 @@
+[package]
+name = "tpt-writ-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Proof-gated capability guard for MCP tool calls"
+readme = "README.md"
+keywords = ["mcp", "capabilities", "security", "guard", "access-control"]
+categories = ["development-tools"]
+
+[dependencies]
+tpt-writ-core = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Test fixtures reuse the generator's own serializer so the guard is always
+# tested against byte-for-byte real manifest documents.
+tpt-telos-codegen = { workspace = true }

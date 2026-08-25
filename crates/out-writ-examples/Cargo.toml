@@ -1,0 +1,30 @@
+[package]
+name = "out-writ-examples"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+description = "Runnable examples and end-to-end tests for tpt-writ"
+readme = "README.md"
+
+[[bin]]
+name = "guarded-counter-server"
+path = "src/bin/guarded_counter_server.rs"
+
+[[bin]]
+name = "agent-demo"
+path = "src/bin/agent_demo.rs"
+
+[dependencies]
+tpt-writ-core = { workspace = true }
+tpt-writ-mcp = { workspace = true }
+tpt-telos-sdk = { workspace = true }
+rmcp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

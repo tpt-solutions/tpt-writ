@@ -1,0 +1,10 @@
+module CounterService {
+    invariant Count { value >= 0 }
+
+    func noop()
+    ;
+
+    func bump(c: Count, n: PositiveInt)
+        ensures c.value == old(c.value) + n
+    ;
+}
