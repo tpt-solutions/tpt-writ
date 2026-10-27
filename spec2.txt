@@ -1,0 +1,82 @@
+Design Update Spec: tpt-writ (Execution Boundary & Capability Guard)
+This document is formatted to be dropped directly into your tpt-writ/spec.txt or as a standalone design-doc.md update. It implements the P0 execution-boundary priorities from the audit.
+Design Update: Execution Boundary and Capability Guard
+Repository: tpt-writ
+Priority: P0 — Required Enforcement Boundary
+Status: Draft / Pending Implementation
+1. Context & Objective
+tpt-norma determines whether an action is logically and state-wise permitted. However, a correct policy engine is useless if an AI agent can bypass it and invoke the underlying tool, database, or MCP (Model Context Protocol) endpoint directly.
+tpt-writ serves as the un-bypassable execution boundary. Its objective is to bind the authorization decision (tpt-norma) to the actual side effect. It ensures that every protected tool call passes through an enforceable, capability-aware authorization path, preventing direct execution, replay attacks, and Time-of-Check to Time-of-Use (TOCTOU) state drift.
+2. Workspace & Crate Layout
+Extend the existing workspace to separate the cryptographic/permit logic from the execution adapters:
+Crate
+Responsibility
+tpt-writ-core
+Permit types, capability definitions, action digests, and single-use token logic.
+tpt-writ-boundary
+The core execution wrapper. Validates the permit, checks state versions, and gates the side effect.
+tpt-writ-mcp
+Specific adapter for intercepting and gating Model Context Protocol (MCP) tool calls.
+tpt-writ-audit
+Emits structured audit events for denials, expirations, bypass attempts, and execution results.
+3. Core Interface Additions
+The following Rust API shapes define the boundary. This crate relies heavily on the Canonical Action Envelope from tpt-uir.
+
+/// An unforgeable, single-use permit issued by the policy engine (tpt-norma).
+pub struct ExecutionPermit {
+    pub permit_id: PermitId,
+    pub action_digest: ActionDigest, // MUST exactly match the proposed action
+    pub state_version: StateVersion, // The state version this permit was evaluated against
+    pub decision_evidence: DecisionEvidence, // From tpt-norma
+    pub issued_at: MonotonicClock,
+    pub expires_at: MonotonicClock,
+    // Cryptographic signature or MAC binding the permit to the action digest
+    pub auth_token: UnforgeablePermit, 
+}
+
+pub trait ExecutionBoundary {
+    /// Attempts to execute a protected action. 
+    /// MUST fail if the permit is invalid, expired, already used, or if the 
+    /// current state version no longer matches the permit's state version.
+    fn execute_protected_action(
+        &self,
+        permit: &ExecutionPermit,
+        request: &ActionRequest,
+    ) -> ExecutionResult;
+}
+
+pub trait CapabilityChecker {
+    /// Verifies the actor has the static capability to invoke this tool/resource,
+    /// independent of the dynamic state-based policy in tpt-norma.
+    fn check_capability(&self, actor: &ActorId, resource: &ResourceId) -> Result<(), CapabilityError>;
+}
+
+4. Strict Invariants & Safety Guarantees
+The implementation must enforce the following invariants. These are the core defenses against AI agent hallucination or misbehavior.
+No Unguarded Paths: The underlying protected resource (e.g., the database, the MCP tool, the hardware actuator) must not be callable through any path that bypasses tpt-writ-boundary. The tool implementation itself should be private or inaccessible to the AI agent.
+Exact-Action Binding: The action_digest inside the ExecutionPermit must be cryptographically verified against the ActionRequest at the moment of execution. If the AI altered even a single byte of the arguments after receiving the permit, execution must be denied.
+TOCTOU Prevention (State-Check at Execution): A signed approval is not sufficient if the state changes between checking and executing. tpt-writ MUST perform a version-checked compare-and-swap (CAS) or equivalent state-version validation at the exact moment of committing the side effect.
+Single-Use Permits: Once an ExecutionPermit is successfully consumed, it must be cryptographically or logically invalidated. Reusing a permit for a second action (or even the same action) must fail.
+Fail-Closed on Bypass: Any attempt to invoke a protected tool without a valid permit must result in an immediate denial and trigger a high-severity audit event.
+5. Acceptance Tests (Definition of Done)
+The following tests must pass in CI to prove the execution boundary is secure:
+Positive: A valid permit, matching the exact action digest and current state version, successfully executes the action and consumes the permit.
+Negative (Replay Attack): Attempting to use the same ExecutionPermit a second time results in a denial.
+Negative (Argument Mutation): The AI requests a permit for Action A, but attempts to execute Action B (where B has the same action_id but different arguments). The digest mismatch causes a denial.
+Negative (State Drift / TOCTOU): The permit is issued against StateVersion 1. Before execution, the state updates to StateVersion 2. The execution boundary rejects the permit.
+Negative (Direct Bypass): The AI agent attempts to call the underlying MCP tool or database function directly, bypassing the ExecutionBoundary trait. The call fails (because the underlying tool is not exposed to the agent).
+Negative (Expired Permit): An action attempted after the expires_at timestamp is denied.
+Audit Verification: Every denial, bypass attempt, and successful execution generates a machine-readable event in tpt-writ-audit.
+6. Integration with MCP (Model Context Protocol)
+Since AI agents frequently interact with tools via MCP, tpt-writ-mcp must act as a strict proxy:
+The AI agent sends an MCP tools/call request.
+The MCP server intercepts the request before it reaches the tool handler.
+The server hashes the request into an ActionDigest and checks for a valid ExecutionPermit.
+If no permit exists, the server automatically routes the request to tpt-norma to generate the permit (or rejects it if the agent is not allowed to request permits directly).
+Once the permit is validated, the MCP server executes the tool and invalidates the permit.
+7. Dependencies & Contracts
+Requires: tpt-uir (for ActionDigest, ActionRequest, and StateVersion canonical definitions).
+Requires: tpt-norma (to consume the Decision and DecisionEvidence and mint the ExecutionPermit).
+Requires: tpt-crypto (for generating and verifying the UnforgeablePermit MACs/signatures).
+Provides to: The Application Layer (e.g., tpt-healthcare-nz, tpt-payments) a secure, auditable way to expose tools to AI agents without risking unauthorized side effects.
+Provides to: tpt-concord (via tpt-writ-audit, to record the final execution result linked to the original decision).
